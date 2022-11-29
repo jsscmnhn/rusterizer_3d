@@ -23,6 +23,6 @@ Access the executable by typing
 You can get Cargo [here](https://www.rust-lang.org/tools/install).
 
 ### Usage
-```rusterizer -i <input> -o <output> <cellsize>```, e.g. ```rusterizer -i input.obj -o output.obj 0.5```
+```rusterizer -i <input> -o <output> <cellsize>```, e.g. ```rusterizer -i input.obj -o output.asc 0.5```
 
 
