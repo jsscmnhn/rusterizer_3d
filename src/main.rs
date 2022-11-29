@@ -19,7 +19,11 @@ struct Cli {
     #[arg()]
     cellsize: f64,
     #[arg(short, long, default_value_t = -9999.)]
-    nodata: f64
+    nodata: f64,
+    #[arg(short, long, default_value_t = 0.)]
+    x_transform: f64,
+    #[arg(short, long, default_value_t = 0.)]
+    y_transform: f64
 }
 
 //-- Types
@@ -38,7 +42,17 @@ struct Bbox {
 }
 
 //-- Basic functions
+/*
 fn add_pts2(avar: Point2, bvar: Point2) -> Point2 {
+    assert_eq!(avar.len(), bvar.len(), "Trying to add unequal lengths!");
+    avar.iter().zip(bvar.iter()).map(|(&a, &b)| a + b)
+        .collect::<Vec<f64>>()
+        .try_into()
+        .unwrap()
+}
+ */
+
+fn add_pts3(avar: Point3, bvar: Point3) -> Point3 {
     assert_eq!(avar.len(), bvar.len(), "Trying to add unequal lengths!");
     avar.iter().zip(bvar.iter()).map(|(&a, &b)| a + b)
         .collect::<Vec<f64>>()
@@ -142,6 +156,19 @@ impl Triangles {
             self.bbox.ymin = pt[1];
         } else if pt[1] > self.bbox.ymax {
             self.bbox.ymax = pt[1];
+        }
+    }
+
+    // Transform points
+    // sets origin of the dataset to [XLL, YLL] and avoids dealing with origin until the output
+    pub fn transform_pts(&mut self) {
+        let pt_transform = [
+            -self.bbox.xmin,
+            -self.bbox.ymin,
+            0.
+        ];
+        for pt in self.points.iter_mut() {
+            *pt = add_pts3(*pt, pt_transform);
         }
     }
 
@@ -281,29 +308,35 @@ fn load_obj(filename: &str) -> Triangles {
     }
 //    println!("triangles faces: {:?}", triangles.faces);
 //    println!("triangles points: {:?}", triangles.points);
+    // transform the coordinate system so that origin for calculation
+    // is the [XLL, YLL] of the dataset
+    triangles.transform_pts();
     return triangles;
 }
 
 //-- Raster data structure
 struct Raster {
-    nrows    : u64,
-    ncols    : u64,
-    cellsize : f64,
-    origin   : Point2,
-    nodataval: f64,
-    array    : Array2::<f64>
+    nrows     : u64,
+    ncols     : u64,
+    cellsize  : f64,
+    origin    : Point2,
+    nodataval : f64,
+    array     : Array2::<f64>
 }
 
 impl Raster {
     //-- Constructor
-    pub fn new(nrows: u64, ncols: u64, cellsize: f64, origin: Point2, nodata: f64) -> Self {
+    pub fn new(dataset_range: &Bbox, cellsize: f64, nodata: f64) -> Self {
+        let nrows = ((dataset_range.ymax - dataset_range.ymin) / cellsize).abs().ceil() as u64;
+        let ncols = ((dataset_range.xmax - dataset_range.xmin) / cellsize).abs().ceil() as u64;
         Raster {
-            nrows    : nrows,
-            ncols    : ncols,
-            cellsize : cellsize,
-            origin   : origin,
-            nodataval: nodata,
-            array    : Array2::from_elem((nrows as usize, ncols as usize), nodata)
+            nrows,
+            ncols,
+            cellsize,
+            origin    : [dataset_range.xmin, dataset_range.ymin],
+            nodataval : nodata,
+            array     : Array2::from_elem((nrows as usize, ncols as usize),
+                                                 nodata)
         }
     }
 
@@ -312,19 +345,19 @@ impl Raster {
     /*
      * Using data structure from package 'geo' instead
     pub fn get_xy_coord(&self, col: u64, row: u64) -> Point2 {
-        assert!(row < self.nrows, "Invalid row index!");
+        assert!(row< self.nrows, "Invalid row index!");
         assert!(col < self.ncols, "Invalid col index!");
-        add_pts2(self.origin,
-            [self.cellsize * (0.5 + col as f64), self.cellsize * (0.5 + row as f64)])
+        [self.cellsize * (0.5 + col as f64), self.cellsize * (0.5 + row as f64)]
     }
      */
 
     pub fn xy_coord_geo(&self, col: u64, row: u64) -> Coord {
         assert!(row < self.nrows, "Invalid row index!");
         assert!(col < self.ncols, "Invalid col index!");
-        let pt = add_pts2(self.origin,
-            [self.cellsize * (0.5 + col as f64), self.cellsize * (0.5 + row as f64)]);
-        coord! { x: pt[0], y: pt[1] }
+        coord! {
+            x: self.cellsize * (0.5 + col as f64),
+            y: self.cellsize * (0.5 + row as f64)
+        }
     }
 
     // Set cell value
@@ -339,6 +372,12 @@ impl Raster {
         assert!(row < self.nrows, "Invalid row index!");
         assert!(col < self.ncols, "Invalid col index!");
         &self.array[[(self.nrows - 1 - row) as usize, col as usize]]
+    }
+
+    // Set the XLL and YLL to user-defined coordinates
+    pub fn set_output_origin(&mut self, transform_pt: Point2) {
+        self.origin[0] += transform_pt[0];
+        self.origin[1] += transform_pt[1];
     }
 
     // Write raster to disk in ESRI ASC format
@@ -373,6 +412,7 @@ fn main() {
     // Grab input agruments
     let cli = Cli::parse();
     let (input, output, cellsize, nodata) = (cli.input, cli.output, cli.cellsize, cli.nodata);
+    let transform_pt: Point2 = [cli.x_transform, cli.y_transform];
 
     /*
     // Debug hardcoded data
@@ -380,18 +420,17 @@ fn main() {
     let output = "output.asc";
     let cellsize= 0.5;
     let nodata : f64 = -9999.;
+    let transform_pt: Point2 = [0., 0.];
      */
 
     // Load obj
     let triangles = load_obj(&input);
 
     // Initialize raster
-    let ncols = ((triangles.bbox.xmax - triangles.bbox.xmin) / cellsize).abs().ceil() as u64;
-    let nrows = ((triangles.bbox.ymax - triangles.bbox.ymin) / cellsize).abs().ceil() as u64;
-    let origin = [triangles.bbox.xmin, triangles.bbox.ymin];
-    let mut raster = Raster::new(nrows, ncols, cellsize, origin, nodata);
+    let mut raster = Raster::new(&triangles.bbox, cellsize, nodata);
 
-    println!("Creating a raster of size: [{}, {}]", nrows, ncols);
+    // Print basic info
+    println!("Creating a raster of size: [{}, {}]", raster.nrows, raster.ncols);
     println!("Bbox min: [{}, {}]", triangles.bbox.xmin, triangles.bbox.ymin);
     println!("Bbox max: [{}, {}]", triangles.bbox.xmax, triangles.bbox.ymax);
     println!("Number of faces: {:?}", triangles.faces.len());
@@ -403,10 +442,10 @@ fn main() {
         let triangle = triangles.get_triangle_geo(face);
         // Get candidate cells from triangle bbox
         let tri_bbox = triangle.bounding_rect();
-        let colstart = ((tri_bbox.min().x - origin[0]).abs() / cellsize).floor() as u64;
-        let colend   = ((tri_bbox.max().x - origin[0]).abs() / cellsize).ceil()  as u64;
-        let rowstart = ((tri_bbox.min().y - origin[1]).abs() / cellsize).floor() as u64;
-        let rowend   = ((tri_bbox.max().y - origin[1]).abs() / cellsize).ceil()  as u64;
+        let colstart = (tri_bbox.min().x.abs() / cellsize).floor() as u64;
+        let colend   = (tri_bbox.max().x.abs() / cellsize).ceil()  as u64;
+        let rowstart = (tri_bbox.min().y.abs() / cellsize).floor() as u64;
+        let rowend   = (tri_bbox.max().y.abs() / cellsize).ceil()  as u64;
 //        println!("rowstart - rowend: {} - {}", rowstart, rowend);
 //        println!("colstart - colend: {} - {}", colstart, colend);
 
@@ -432,6 +471,10 @@ fn main() {
         pb.inc(1);
     }
     pb.finish_with_message("done");
+
+    // Transform points to the output CRS before writing to disk
+    raster.set_output_origin(transform_pt);
+
     // Output raster
     println!("\n\nWriting raster to disk...");
     let re = raster.write_asc(output.to_string());
