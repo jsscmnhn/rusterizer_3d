@@ -5,7 +5,7 @@ Convert 3D geometries to a 2D raster.
 ### Data formats
 Input: Wavefront OBJ
 
-Output: ESRI ASC
+Output: [Esri ASCII](https://en.wikipedia.org/wiki/Esri_grid)
 
 ### Compilation
 Download the repository and do

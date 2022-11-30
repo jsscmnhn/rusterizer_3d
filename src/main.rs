@@ -1,12 +1,12 @@
-use tobj;
-use ndarray::{Array2, Axis};
+use clap::Parser;
+use indicatif::ProgressBar;
 use geo::{coord, Coord, BoundingRect, Area};
 use geo::coordinate_position::{CoordinatePosition, CoordPos};
-use std::fs::File;
+use ndarray::{Array2, Axis};
 use std::io::Write;
+use std::fs::File;
 use std::time::Instant;
-use indicatif::ProgressBar;
-use clap::Parser;
+use tobj;
 
 //-- CLI parser
 #[derive(Parser)]
@@ -27,11 +27,10 @@ struct Cli {
 }
 
 //-- Types
-type Point3  = [f64; 3];
-type Point2  = [f64; 2];
-type Face    = [u64; 3];
-//type Triangle = [Point3; 3];
-type Triangle = Vec<Point3>; //for now
+type Point3   = [f64; 3];
+type Point2   = [f64; 2];
+type Face     = [u64; 3];
+type Triangle = [Point3; 3];
 
 //-- Primitives
 struct Bbox {
@@ -90,19 +89,16 @@ fn get_bbox(triangle: &Vec<Point2>) -> Bbox {
 // Linear interpolation within a triangle
 pub fn interpolate_linear(triangle: &Triangle, pt: &Coord) -> f64 {
     let a0: f64 = geo::Triangle::new(
-//        coord!{ x: pt[0], y:pt[1] },
         *pt,
         coord!{ x: triangle[1][0], y: triangle[1][1] },
         coord!{ x: triangle[2][0], y: triangle[2][1] }
     ).unsigned_area();
     let a1: f64 = geo::Triangle::new(
-//        coord!{ x: pt[0], y:pt[1] },
         *pt,
         coord!{ x: triangle[0][0], y: triangle[0][1] },
         coord!{ x: triangle[2][0], y: triangle[2][1] }
     ).unsigned_area();
     let a2: f64 = geo::Triangle::new(
-//        coord!{ x: pt[0], y:pt[1] },
         *pt,
         coord!{ x: triangle[0][0], y: triangle[0][1] },
         coord!{ x: triangle[1][0], y: triangle[1][1] }
@@ -119,7 +115,7 @@ pub fn interpolate_linear(triangle: &Triangle, pt: &Coord) -> f64 {
 struct Triangles {
     faces : Vec<Face>,
     points: Vec<Point3>,
-    bbox  : Bbox             // dataset range
+    bbox  : Bbox         // dataset range
 }
 
 impl Triangles {
@@ -174,19 +170,19 @@ impl Triangles {
 
     // Return triangle vertices
     // returns 3x3 array [x, y, z] for every face vertex
-    pub fn get_triangle(&self, faceidx: u64) -> Vec<Point3> {
-        assert_eq!(self.faces[faceidx as usize].len(), 3 as usize, "Triangle structure has more than 3 vertices!");
-        let mut triangle: Vec<Point3> = Vec::with_capacity(3);
-        for ptidx in &self.faces[faceidx as usize] {
-            let pt = &self.points[*ptidx as usize];
-            triangle.push(*pt);
-        }
-        return triangle;
+    pub fn get_triangle(&self, faceidx: u64) -> Triangle {
+        assert_eq!(self.faces[faceidx as usize].len(), 3 as usize,
+                   "Triangle structure has more than 3 vertices!");
+        [
+            self.points[self.faces[faceidx as usize][0] as usize],
+            self.points[self.faces[faceidx as usize][1] as usize],
+            self.points[self.faces[faceidx as usize][2] as usize]
+        ]
     }
 
     // Return triangle vertices, 2D (x-y) projection
     /*
-     * Using data structures from package 'geo'
+     * Using data structures from package 'geo' instead
     pub fn get_triangle_xy(&self, faceidx: usize) -> Vec<Point2> {
         let mut triangle: Vec<Point2> = Vec::with_capacity(3);
         for ptidx in &self.faces[faceidx] {
@@ -268,7 +264,6 @@ fn load_obj(filename: &str) -> Triangles {
          */
         assert!(mesh.indices.len() % 3 == 0); // faces should be triangulated
         for fidx in 0..mesh.indices.len() / 3 {
-//            let face_indices: Vec<u32> = (&mesh.indices[next_face..end]).to_vec();
 //            println!(" face[{}].indices          = {:?}", face, face_indices);
             let face_indices: Face = [
                 mesh.indices[3 * fidx] as u64     + ptstart as u64,
@@ -303,11 +298,14 @@ fn load_obj(filename: &str) -> Triangles {
             triangles.add_pt(point);
         }
         ptstart = triangles.points.len();
-//        dbg!(mesh.positions.len(), mesh.indices.len() / 3, triangles.faces.len(), mesh.indices.len(), triangles.points.len(), ptstart);
+//        dbg!(mesh.positions.len(), mesh.indices.len() / 3,
+//             triangles.faces.len(), mesh.indices.len(),
+//             triangles.points.len(), ptstart);
 //        println!("");
     }
 //    println!("triangles faces: {:?}", triangles.faces);
 //    println!("triangles points: {:?}", triangles.points);
+
     // transform the coordinate system so that origin for calculation
     // is the [XLL, YLL] of the dataset
     triangles.transform_pts();
@@ -336,7 +334,7 @@ impl Raster {
             origin    : [dataset_range.xmin, dataset_range.ymin],
             nodataval : nodata,
             array     : Array2::from_elem((nrows as usize, ncols as usize),
-                                                 nodata)
+                                          nodata)
         }
     }
 
@@ -351,6 +349,8 @@ impl Raster {
     }
      */
 
+    // Get cell centroid coordinates (x-y) in coord data structure
+    // of 'geo' package
     pub fn xy_coord_geo(&self, col: u64, row: u64) -> Coord {
         assert!(row < self.nrows, "Invalid row index!");
         assert!(col < self.ncols, "Invalid col index!");
