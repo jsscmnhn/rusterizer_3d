@@ -41,16 +41,6 @@ struct Bbox {
 }
 
 //-- Basic functions
-/*
-fn add_pts2(avar: Point2, bvar: Point2) -> Point2 {
-    assert_eq!(avar.len(), bvar.len(), "Trying to add unequal lengths!");
-    avar.iter().zip(bvar.iter()).map(|(&a, &b)| a + b)
-        .collect::<Vec<f64>>()
-        .try_into()
-        .unwrap()
-}
- */
-
 fn add_pts3(avar: Point3, bvar: Point3) -> Point3 {
     assert_eq!(avar.len(), bvar.len(), "Trying to add unequal lengths!");
     avar.iter().zip(bvar.iter()).map(|(&a, &b)| a + b)
@@ -58,33 +48,6 @@ fn add_pts3(avar: Point3, bvar: Point3) -> Point3 {
         .try_into()
         .unwrap()
 }
-
-/*
- * Using bbox from package 'geo' instead
-fn get_bbox(triangle: &Vec<Point2>) -> Bbox {
-    assert!(!triangle.is_empty(), "Trying to calculate bbox of an empty triangle!");
-    // Start value
-    let mut bbox = Bbox {
-        xmin: triangle[0][0],
-        ymin: triangle[0][1],
-        xmax: triangle[0][0],
-        ymax: triangle[0][1]
-    };
-    for pt in triangle {
-        if pt[0] < bbox.xmin {
-            bbox.xmin = pt[0];
-        } else if pt[0] > bbox.xmax {
-            bbox.xmax = pt[0];
-        }
-        if pt[1] < bbox.ymin {
-            bbox.ymin = pt[1];
-        } else if pt[1] > bbox.ymax {
-            bbox.ymax = pt[1];
-        }
-    }
-    return bbox;
-}
- */
 
 // Linear interpolation within a triangle
 pub fn interpolate_linear(triangle: &Triangle, pt: &Coord) -> f64 {
@@ -170,27 +133,15 @@ impl Triangles {
 
     // Return triangle vertices
     // returns 3x3 array [x, y, z] for every face vertex
-    pub fn get_triangle(&self, faceidx: u64) -> Triangle {
+    pub fn get_triangle(&self, faceidx: usize) -> Triangle {
         assert_eq!(self.faces[faceidx as usize].len(), 3 as usize,
                    "Triangle structure has more than 3 vertices!");
         [
-            self.points[self.faces[faceidx as usize][0] as usize],
-            self.points[self.faces[faceidx as usize][1] as usize],
-            self.points[self.faces[faceidx as usize][2] as usize]
+            self.points[self.faces[faceidx][0] as usize],
+            self.points[self.faces[faceidx][1] as usize],
+            self.points[self.faces[faceidx][2] as usize]
         ]
     }
-
-    // Return triangle vertices, 2D (x-y) projection
-    /*
-     * Using data structures from package 'geo' instead
-    pub fn get_triangle_xy(&self, faceidx: usize) -> Vec<Point2> {
-        let mut triangle: Vec<Point2> = Vec::with_capacity(3);
-        for ptidx in &self.faces[faceidx] {
-            triangle.push([self.points[*ptidx as usize][0], self.points[*ptidx as usize][1]]);
-        }
-        return triangle;
-    }
-     */
 
     // Return triangle vertices, 2D (x-y) projection in the triangle
     // data struct of package 'geo'
@@ -244,27 +195,8 @@ fn load_obj(filename: &str) -> Triangles {
     let mut ptstart: usize = 0;
     for (_i, m) in models.iter().enumerate() {
         let mesh = &m.mesh;
-        /*
-        println!(
-            "model[{}].face_count       = {}",
-            i,
-            mesh.indices.len() / 3
-        );
-         */
-        /*
-        let mut next_face = 0;
-        for face in 0..mesh.face_arities.len() {
-            let end = next_face + mesh.face_arities[face] as usize;
-
-            let face_indices = &mesh.indices[next_face..end];
-            println!(" face[{}].indices          = {:?}", face, face_indices);
-
-            next_face = end;
-        }
-         */
         assert!(mesh.indices.len() % 3 == 0); // faces should be triangulated
         for fidx in 0..mesh.indices.len() / 3 {
-//            println!(" face[{}].indices          = {:?}", face, face_indices);
             let face_indices: Face = [
                 mesh.indices[3 * fidx] as u64     + ptstart as u64,
                 mesh.indices[3 * fidx + 1] as u64 + ptstart as u64,
@@ -272,24 +204,8 @@ fn load_obj(filename: &str) -> Triangles {
             ];
             triangles.add_face(face_indices);
         }
-        /*
-        println!(
-            "model[{}].positions        = {}",
-            i,
-            mesh.positions.len() / 3
-        );
-         */
         assert!(mesh.positions.len() % 3 == 0);
         for vtx in 0..mesh.positions.len() / 3 {
-            /*
-            println!(
-                "              position[{}] = ({}, {}, {})",
-                vtx,
-                mesh.positions[3 * vtx],
-                mesh.positions[3 * vtx + 1],
-                mesh.positions[3 * vtx + 2]
-            );
-             */
             let point = [
                 mesh.positions[3 * vtx] as f64,
                 mesh.positions[3 * vtx + 1] as f64,
@@ -298,14 +214,7 @@ fn load_obj(filename: &str) -> Triangles {
             triangles.add_pt(point);
         }
         ptstart = triangles.points.len();
-//        dbg!(mesh.positions.len(), mesh.indices.len() / 3,
-//             triangles.faces.len(), mesh.indices.len(),
-//             triangles.points.len(), ptstart);
-//        println!("");
     }
-//    println!("triangles faces: {:?}", triangles.faces);
-//    println!("triangles points: {:?}", triangles.points);
-
     // transform the coordinate system so that origin for calculation
     // is the [XLL, YLL] of the dataset
     triangles.transform_pts();
@@ -339,16 +248,6 @@ impl Raster {
     }
 
     //-- Methods
-    // Get cell centroid coordinates (x-y)
-    /*
-     * Using data structure from package 'geo' instead
-    pub fn get_xy_coord(&self, col: u64, row: u64) -> Point2 {
-        assert!(row< self.nrows, "Invalid row index!");
-        assert!(col < self.ncols, "Invalid col index!");
-        [self.cellsize * (0.5 + col as f64), self.cellsize * (0.5 + row as f64)]
-    }
-     */
-
     // Get cell centroid coordinates (x-y) in coord data structure
     // of 'geo' package
     pub fn xy_coord_geo(&self, col: u64, row: u64) -> Coord {
@@ -414,15 +313,6 @@ fn main() {
     let (input, output, cellsize, nodata) = (cli.input, cli.output, cli.cellsize, cli.nodata);
     let transform_pt: Point2 = [cli.x_transform, cli.y_transform];
 
-    /*
-    // Debug hardcoded data
-    let input = "testfile.obj";
-    let output = "output.asc";
-    let cellsize= 0.5;
-    let nodata : f64 = -9999.;
-    let transform_pt: Point2 = [0., 0.];
-     */
-
     // Load obj
     let triangles = load_obj(&input);
 
@@ -457,7 +347,7 @@ fn main() {
                 if (coordpos == CoordPos::Inside) || (coordpos == CoordPos::OnBoundary) {
                     // interpolate
                     let height = interpolate_linear(
-                        &triangles.get_triangle(face as u64),
+                        &triangles.get_triangle(face),
                         pt
                     );
 //                    println!("interpolated height: {} at [{}, {}]", height, i, j);
