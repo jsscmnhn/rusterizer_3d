@@ -29,7 +29,7 @@ struct Cli {
 //-- Types
 type Point3   = [f64; 3];
 type Point2   = [f64; 2];
-type Face     = [u64; 3];
+type Face     = [usize; 3];
 type Triangle = [Point3; 3];
 
 //-- Primitives
@@ -41,6 +41,7 @@ struct Bbox {
 }
 
 //-- Basic functions
+// Add Point3
 fn add_pts3(avar: Point3, bvar: Point3) -> Point3 {
     assert_eq!(avar.len(), bvar.len(), "Trying to add unequal lengths!");
     avar.iter().zip(bvar.iter()).map(|(&a, &b)| a + b)
@@ -134,12 +135,12 @@ impl Triangles {
     // Return triangle vertices
     // returns 3x3 array [x, y, z] for every face vertex
     pub fn get_triangle(&self, faceidx: usize) -> Triangle {
-        assert_eq!(self.faces[faceidx as usize].len(), 3 as usize,
+        assert_eq!(self.faces[faceidx].len(), 3,
                    "Triangle structure has more than 3 vertices!");
         [
-            self.points[self.faces[faceidx][0] as usize],
-            self.points[self.faces[faceidx][1] as usize],
-            self.points[self.faces[faceidx][2] as usize]
+            self.points[self.faces[faceidx][0]],
+            self.points[self.faces[faceidx][1]],
+            self.points[self.faces[faceidx][2]]
         ]
     }
 
@@ -147,30 +148,30 @@ impl Triangles {
     // data struct of package 'geo'
     pub fn get_triangle_geo(&self, faceidx: usize) -> geo::Triangle {
         let pt0 = [
-            self.points[self.faces[faceidx][0] as usize][0],
-            self.points[self.faces[faceidx][0] as usize][1]
+            self.points[self.faces[faceidx][0]][0],
+            self.points[self.faces[faceidx][0]][1]
         ];
         let pt1 = [
-            self.points[self.faces[faceidx][1] as usize][0],
-            self.points[self.faces[faceidx][1] as usize][1]
+            self.points[self.faces[faceidx][1]][0],
+            self.points[self.faces[faceidx][1]][1]
         ];
         let pt2 = [
-            self.points[self.faces[faceidx][2] as usize][0],
-            self.points[self.faces[faceidx][2] as usize][1]
+            self.points[self.faces[faceidx][2]][0],
+            self.points[self.faces[faceidx][2]][1]
         ];
         geo::Triangle::new(
-            coord! {x: pt0[0], y: pt0[1]},
-            coord! {x: pt1[0], y: pt1[1]},
-            coord! {x: pt2[0], y: pt2[1]}
+            coord!{ x: pt0[0], y: pt0[1] },
+            coord!{ x: pt1[0], y: pt1[1] },
+            coord!{ x: pt2[0], y: pt2[1] }
         )
     }
 
     // Return triangle vertices, height (z-coordinate) only
     /*
-    pub fn get_triangle_z(&self, faceidx: u64) -> Vec<f64> {
+    pub fn get_triangle_z(&self, faceidx: usize) -> Vec<f64> {
         let mut triangle: Vec<f64> = Vec::with_capacity(3);
-        for ptidx in &self.faces[faceidx as usize] {
-            triangle.push(self.points[*ptidx as usize][2]);
+        for ptidx in &self.faces[faceidx] {
+            triangle.push(self.points[*ptidx][2]);
         }
         return triangle;
     }
@@ -195,19 +196,19 @@ fn load_obj(filename: &str) -> Triangles {
     let mut ptstart: usize = 0;
     for (_i, m) in models.iter().enumerate() {
         let mesh = &m.mesh;
-        assert!(mesh.indices.len() % 3 == 0); // faces should be triangulated
+        assert_eq!(mesh.indices.len() % 3, 0, "Faces should be triangulated");
         for fidx in 0..mesh.indices.len() / 3 {
             let face_indices: Face = [
-                mesh.indices[3 * fidx] as u64     + ptstart as u64,
-                mesh.indices[3 * fidx + 1] as u64 + ptstart as u64,
-                mesh.indices[3 * fidx + 2] as u64 + ptstart as u64,
+                mesh.indices[3 * fidx]     as usize + ptstart,
+                mesh.indices[3 * fidx + 1] as usize + ptstart,
+                mesh.indices[3 * fidx + 2] as usize + ptstart,
             ];
             triangles.add_face(face_indices);
         }
-        assert!(mesh.positions.len() % 3 == 0);
+        assert_eq!(mesh.positions.len() % 3, 0, "More than three vertices per face!");
         for vtx in 0..mesh.positions.len() / 3 {
             let point = [
-                mesh.positions[3 * vtx] as f64,
+                mesh.positions[3 * vtx]     as f64,
                 mesh.positions[3 * vtx + 1] as f64,
                 mesh.positions[3 * vtx + 2] as f64
             ];
@@ -215,7 +216,7 @@ fn load_obj(filename: &str) -> Triangles {
         }
         ptstart = triangles.points.len();
     }
-    // transform the coordinate system so that origin for calculation
+    // Transform the coordinate system so that origin for calculation
     // is the [XLL, YLL] of the dataset
     triangles.transform_pts();
     return triangles;
@@ -223,8 +224,8 @@ fn load_obj(filename: &str) -> Triangles {
 
 //-- Raster data structure
 struct Raster {
-    nrows     : u64,
-    ncols     : u64,
+    nrows     : usize,
+    ncols     : usize,
     cellsize  : f64,
     origin    : Point2,
     nodataval : f64,
@@ -234,15 +235,15 @@ struct Raster {
 impl Raster {
     //-- Constructor
     pub fn new(dataset_range: &Bbox, cellsize: f64, nodata: f64) -> Self {
-        let nrows = ((dataset_range.ymax - dataset_range.ymin) / cellsize).abs().ceil() as u64;
-        let ncols = ((dataset_range.xmax - dataset_range.xmin) / cellsize).abs().ceil() as u64;
+        let nrows = ((dataset_range.ymax - dataset_range.ymin) / cellsize).abs().ceil() as usize;
+        let ncols = ((dataset_range.xmax - dataset_range.xmin) / cellsize).abs().ceil() as usize;
         Raster {
             nrows,
             ncols,
             cellsize,
             origin    : [dataset_range.xmin, dataset_range.ymin],
             nodataval : nodata,
-            array     : Array2::from_elem((nrows as usize, ncols as usize),
+            array     : Array2::from_elem((nrows, ncols),
                                           nodata)
         }
     }
@@ -250,7 +251,7 @@ impl Raster {
     //-- Methods
     // Get cell centroid coordinates (x-y) in coord data structure
     // of 'geo' package
-    pub fn xy_coord_geo(&self, col: u64, row: u64) -> Coord {
+    pub fn xy_coord_geo(&self, col: usize, row: usize) -> Coord {
         assert!(row < self.nrows, "Invalid row index!");
         assert!(col < self.ncols, "Invalid col index!");
         coord! {
@@ -260,17 +261,17 @@ impl Raster {
     }
 
     // Set cell value
-    pub fn set_val(&mut self, col: u64, row: u64, val: f64) {
+    pub fn set_val(&mut self, col: usize, row: usize, val: f64) {
         assert!(row < self.nrows, "Invalid row index!");
         assert!(col < self.ncols, "Invalid col index!");
-        self.array[[(self.nrows - 1 - row) as usize, col as usize]] = val;
+        self.array[[(self.nrows - 1 - row), col]] = val;
     }
 
     // Return cell value
-    pub fn at(&self, col: u64, row: u64) -> &f64 {
+    pub fn at(&self, col: usize, row: usize) -> &f64 {
         assert!(row < self.nrows, "Invalid row index!");
         assert!(col < self.ncols, "Invalid col index!");
-        &self.array[[(self.nrows - 1 - row) as usize, col as usize]]
+        &self.array[[(self.nrows - 1 - row), col]]
     }
 
     // Set the XLL and YLL to user-defined coordinates
@@ -332,10 +333,10 @@ fn main() {
         let triangle = triangles.get_triangle_geo(face);
         // Get candidate cells from triangle bbox
         let tri_bbox = triangle.bounding_rect();
-        let colstart = (tri_bbox.min().x.abs() / cellsize).floor() as u64;
-        let colend   = (tri_bbox.max().x.abs() / cellsize).ceil()  as u64;
-        let rowstart = (tri_bbox.min().y.abs() / cellsize).floor() as u64;
-        let rowend   = (tri_bbox.max().y.abs() / cellsize).ceil()  as u64;
+        let colstart = (tri_bbox.min().x.abs() / cellsize).floor() as usize;
+        let colend   = (tri_bbox.max().x.abs() / cellsize).ceil()  as usize;
+        let rowstart = (tri_bbox.min().y.abs() / cellsize).floor() as usize;
+        let rowend   = (tri_bbox.max().y.abs() / cellsize).ceil()  as usize;
 //        println!("rowstart - rowend: {} - {}", rowstart, rowend);
 //        println!("colstart - colend: {} - {}", colstart, colend);
 
