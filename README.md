@@ -8,7 +8,12 @@ Input: Wavefront OBJ
 Output: [Esri ASCII](https://en.wikipedia.org/wiki/Esri_grid)
 
 ### Compilation
-Download the repository and do
+Clone the repository with submodules
+```
+git clone --recurse-submodules git@github.com:ipadjen/rusterizer.git
+```
+
+To compile, type
 
 ```
 cargo build --release

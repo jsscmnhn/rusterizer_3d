@@ -6,7 +6,7 @@ use ndarray::{Array2, Axis};
 use std::io::Write;
 use std::fs::File;
 use std::time::Instant;
-use tobj;
+use tobj_f64;
 
 //-- CLI parser
 #[derive(Parser)]
@@ -179,19 +179,18 @@ impl Triangles {
 }
 
 //-- Load OBJ into vector of triangles
-//todo see what to do about the double precision here
 fn load_obj(filename: &str) -> Triangles {
     println!("Loading file '{}'", filename);
-    let load_options = &tobj::LoadOptions {
+    let load_options = &tobj_f64::LoadOptions {
         triangulate: true,
         ..Default::default()
     };
 
-    let (models, _materials) = tobj::load_obj(filename, load_options)
+    let (models, _materials) = tobj_f64::load_obj(filename, load_options)
         .expect("Failed to load OBJ file");
 //    println!("Number of models          = {}", models.len());
     let firstpt = &models[0].mesh.positions;
-    let mut triangles = Triangles::new([firstpt[0] as f64, firstpt[1] as f64]);
+    let mut triangles = Triangles::new([firstpt[0], firstpt[1]]);
 
     let mut ptstart: usize = 0;
     for (_i, m) in models.iter().enumerate() {
@@ -208,9 +207,9 @@ fn load_obj(filename: &str) -> Triangles {
         assert_eq!(mesh.positions.len() % 3, 0, "More than three vertices per face!");
         for vtx in 0..mesh.positions.len() / 3 {
             let point = [
-                mesh.positions[3 * vtx]     as f64,
-                mesh.positions[3 * vtx + 1] as f64,
-                mesh.positions[3 * vtx + 2] as f64
+                mesh.positions[3 * vtx],
+                mesh.positions[3 * vtx + 1],
+                mesh.positions[3 * vtx + 2]
             ];
             triangles.add_pt(point);
         }
