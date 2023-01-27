@@ -6,7 +6,7 @@ use ndarray::{Array2, Axis};
 use std::io::Write;
 use std::fs::File;
 use std::time::Instant;
-use tobj_f64;
+use tobj;
 
 //-- CLI parser
 #[derive(Parser)]
@@ -181,12 +181,12 @@ impl Triangles {
 //-- Load OBJ into vector of triangles
 fn load_obj(filename: &str) -> Triangles {
     println!("Loading file '{}'", filename);
-    let load_options = &tobj_f64::LoadOptions {
+    let load_options = &tobj::LoadOptions {
         triangulate: true,
         ..Default::default()
     };
 
-    let (models, _materials) = tobj_f64::load_obj(filename, load_options)
+    let (models, _materials) = tobj::load_obj(filename, load_options)
         .expect("Failed to load OBJ file");
 //    println!("Number of models          = {}", models.len());
     let firstpt = &models[0].mesh.positions;
