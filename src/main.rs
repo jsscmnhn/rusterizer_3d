@@ -1,12 +1,15 @@
 use clap::Parser;
+use geo::coordinate_position::{CoordPos, CoordinatePosition};
+use geo::{coord, Area, BoundingRect, Coord};
 use indicatif::ProgressBar;
-use geo::{coord, Coord, BoundingRect, Area};
-use geo::coordinate_position::{CoordinatePosition, CoordPos};
 use ndarray::{Array2, Axis};
-use std::io::Write;
 use std::fs::File;
+use std::io::Write;
 use std::time::Instant;
 use tobj;
+
+#[cfg(feature = "with_gdal")]
+use gdal::DriverManager;
 
 //-- CLI parser
 #[derive(Parser)]
@@ -23,13 +26,13 @@ struct Cli {
     #[arg(short, long, default_value_t = 0.)]
     x_transform: f64,
     #[arg(short, long, default_value_t = 0.)]
-    y_transform: f64
+    y_transform: f64,
 }
 
 //-- Types
-type Point3   = [f64; 3];
-type Point2   = [f64; 2];
-type Face     = [usize; 3];
+type Point3 = [f64; 3];
+type Point2 = [f64; 2];
+type Face = [usize; 3];
 type Triangle = [Point3; 3];
 
 //-- Primitives
@@ -37,14 +40,16 @@ struct Bbox {
     xmin: f64,
     ymin: f64,
     xmax: f64,
-    ymax: f64
+    ymax: f64,
 }
 
 //-- Basic functions
 // Add Point3
 fn add_pts3(avar: Point3, bvar: Point3) -> Point3 {
     assert_eq!(avar.len(), bvar.len(), "Trying to add unequal lengths!");
-    avar.iter().zip(bvar.iter()).map(|(&a, &b)| a + b)
+    avar.iter()
+        .zip(bvar.iter())
+        .map(|(&a, &b)| a + b)
         .collect::<Vec<f64>>()
         .try_into()
         .unwrap()
@@ -54,19 +59,22 @@ fn add_pts3(avar: Point3, bvar: Point3) -> Point3 {
 pub fn interpolate_linear(triangle: &Triangle, pt: &Coord) -> f64 {
     let a0: f64 = geo::Triangle::new(
         *pt,
-        coord!{ x: triangle[1][0], y: triangle[1][1] },
-        coord!{ x: triangle[2][0], y: triangle[2][1] }
-    ).unsigned_area();
+        coord! { x: triangle[1][0], y: triangle[1][1] },
+        coord! { x: triangle[2][0], y: triangle[2][1] },
+    )
+    .unsigned_area();
     let a1: f64 = geo::Triangle::new(
         *pt,
-        coord!{ x: triangle[0][0], y: triangle[0][1] },
-        coord!{ x: triangle[2][0], y: triangle[2][1] }
-    ).unsigned_area();
+        coord! { x: triangle[0][0], y: triangle[0][1] },
+        coord! { x: triangle[2][0], y: triangle[2][1] },
+    )
+    .unsigned_area();
     let a2: f64 = geo::Triangle::new(
         *pt,
-        coord!{ x: triangle[0][0], y: triangle[0][1] },
-        coord!{ x: triangle[1][0], y: triangle[1][1] }
-    ).unsigned_area();
+        coord! { x: triangle[0][0], y: triangle[0][1] },
+        coord! { x: triangle[1][0], y: triangle[1][1] },
+    )
+    .unsigned_area();
 
     let mut total = 0.;
     total += triangle[0][2] * a0;
@@ -77,23 +85,23 @@ pub fn interpolate_linear(triangle: &Triangle, pt: &Coord) -> f64 {
 
 //-- Map of OBJ mesh faces
 struct Triangles {
-    faces : Vec<Face>,
+    faces: Vec<Face>,
     points: Vec<Point3>,
-    bbox  : Bbox         // dataset range
+    bbox: Bbox, // dataset range
 }
 
 impl Triangles {
     //-- Constructor using the information from obj import
     pub fn new(firstpt: Point2) -> Self {
         Triangles {
-            faces : Vec::new(),
+            faces: Vec::new(),
             points: Vec::new(),
-            bbox  : Bbox {
+            bbox: Bbox {
                 xmin: firstpt[0],
                 ymin: firstpt[1],
                 xmax: firstpt[0],
-                ymax: firstpt[1]
-            }
+                ymax: firstpt[1],
+            },
         }
     }
 
@@ -122,11 +130,7 @@ impl Triangles {
     // Transform points
     // sets origin of the dataset to [XLL, YLL] and avoids dealing with origin until the output
     pub fn transform_pts(&mut self) {
-        let pt_transform = [
-            -self.bbox.xmin,
-            -self.bbox.ymin,
-            0.
-        ];
+        let pt_transform = [-self.bbox.xmin, -self.bbox.ymin, 0.];
         for pt in self.points.iter_mut() {
             *pt = add_pts3(*pt, pt_transform);
         }
@@ -135,12 +139,15 @@ impl Triangles {
     // Return triangle vertices
     // returns 3x3 array [x, y, z] for every face vertex
     pub fn get_triangle(&self, faceidx: usize) -> Triangle {
-        assert_eq!(self.faces[faceidx].len(), 3,
-                   "Triangle structure has more than 3 vertices!");
+        assert_eq!(
+            self.faces[faceidx].len(),
+            3,
+            "Triangle structure has more than 3 vertices!"
+        );
         [
             self.points[self.faces[faceidx][0]],
             self.points[self.faces[faceidx][1]],
-            self.points[self.faces[faceidx][2]]
+            self.points[self.faces[faceidx][2]],
         ]
     }
 
@@ -149,20 +156,20 @@ impl Triangles {
     pub fn get_triangle_geo(&self, faceidx: usize) -> geo::Triangle {
         let pt0 = [
             self.points[self.faces[faceidx][0]][0],
-            self.points[self.faces[faceidx][0]][1]
+            self.points[self.faces[faceidx][0]][1],
         ];
         let pt1 = [
             self.points[self.faces[faceidx][1]][0],
-            self.points[self.faces[faceidx][1]][1]
+            self.points[self.faces[faceidx][1]][1],
         ];
         let pt2 = [
             self.points[self.faces[faceidx][2]][0],
-            self.points[self.faces[faceidx][2]][1]
+            self.points[self.faces[faceidx][2]][1],
         ];
         geo::Triangle::new(
-            coord!{ x: pt0[0], y: pt0[1] },
-            coord!{ x: pt1[0], y: pt1[1] },
-            coord!{ x: pt2[0], y: pt2[1] }
+            coord! { x: pt0[0], y: pt0[1] },
+            coord! { x: pt1[0], y: pt1[1] },
+            coord! { x: pt2[0], y: pt2[1] },
         )
     }
 
@@ -186,9 +193,9 @@ fn load_obj(filename: &str) -> Triangles {
         ..Default::default()
     };
 
-    let (models, _materials) = tobj::load_obj(filename, load_options)
-        .expect("Failed to load OBJ file");
-//    println!("Number of models          = {}", models.len());
+    let (models, _materials) =
+        tobj::load_obj(filename, load_options).expect("Failed to load OBJ file");
+    //    println!("Number of models          = {}", models.len());
     let firstpt = &models[0].mesh.positions;
     let mut triangles = Triangles::new([firstpt[0], firstpt[1]]);
 
@@ -198,18 +205,22 @@ fn load_obj(filename: &str) -> Triangles {
         assert_eq!(mesh.indices.len() % 3, 0, "Faces should be triangulated");
         for fidx in 0..mesh.indices.len() / 3 {
             let face_indices: Face = [
-                mesh.indices[3 * fidx]     as usize + ptstart,
+                mesh.indices[3 * fidx] as usize + ptstart,
                 mesh.indices[3 * fidx + 1] as usize + ptstart,
                 mesh.indices[3 * fidx + 2] as usize + ptstart,
             ];
             triangles.add_face(face_indices);
         }
-        assert_eq!(mesh.positions.len() % 3, 0, "More than three vertices per face!");
+        assert_eq!(
+            mesh.positions.len() % 3,
+            0,
+            "More than three vertices per face!"
+        );
         for vtx in 0..mesh.positions.len() / 3 {
             let point = [
                 mesh.positions[3 * vtx],
                 mesh.positions[3 * vtx + 1],
-                mesh.positions[3 * vtx + 2]
+                mesh.positions[3 * vtx + 2],
             ];
             triangles.add_pt(point);
         }
@@ -223,27 +234,30 @@ fn load_obj(filename: &str) -> Triangles {
 
 //-- Raster data structure
 struct Raster {
-    nrows     : usize,
-    ncols     : usize,
-    cellsize  : f64,
-    origin    : Point2,
-    nodataval : f64,
-    array     : Array2::<f64>
+    nrows: usize,
+    ncols: usize,
+    cellsize: f64,
+    origin: Point2,
+    nodataval: f64,
+    array: Array2<f64>,
 }
 
 impl Raster {
     //-- Constructor
     pub fn new(dataset_range: &Bbox, cellsize: f64, nodata: f64) -> Self {
-        let nrows = ((dataset_range.ymax - dataset_range.ymin) / cellsize).abs().ceil() as usize;
-        let ncols = ((dataset_range.xmax - dataset_range.xmin) / cellsize).abs().ceil() as usize;
+        let nrows = ((dataset_range.ymax - dataset_range.ymin) / cellsize)
+            .abs()
+            .ceil() as usize;
+        let ncols = ((dataset_range.xmax - dataset_range.xmin) / cellsize)
+            .abs()
+            .ceil() as usize;
         Raster {
             nrows,
             ncols,
             cellsize,
-            origin    : [dataset_range.xmin, dataset_range.ymin],
-            nodataval : nodata,
-            array     : Array2::from_elem((nrows, ncols),
-                                          nodata)
+            origin: [dataset_range.xmin, dataset_range.ymin],
+            nodataval: nodata,
+            array: Array2::from_elem((nrows, ncols), nodata),
         }
     }
 
@@ -284,15 +298,18 @@ impl Raster {
         let mut f = File::create(path)?;
         let mut s = String::new();
         // write header
-        s.push_str(&format!("NCOLS {}\n",        self.ncols));
-        s.push_str(&format!("NROWS {}\n",        self.nrows));
-        s.push_str(&format!("XLLCORNER {}\n",    self.origin[0]));
-        s.push_str(&format!("YLLCORNER {}\n",    self.origin[1]));
-        s.push_str(&format!("CELLSIZE  {}\n",    self.cellsize));
+        s.push_str(&format!("NCOLS {}\n", self.ncols));
+        s.push_str(&format!("NROWS {}\n", self.nrows));
+        s.push_str(&format!("XLLCORNER {}\n", self.origin[0]));
+        s.push_str(&format!("YLLCORNER {}\n", self.origin[1]));
+        s.push_str(&format!("CELLSIZE  {}\n", self.cellsize));
         s.push_str(&format!("NODATA_VALUE {}\n", self.nodataval));
         // write raster data
         for i in 0..self.array.dim().0 {
-            let col = self.array.index_axis(Axis(0), i).iter()
+            let col = self
+                .array
+                .index_axis(Axis(0), i)
+                .iter()
                 .map(|val| format!("{}", val))
                 .collect::<Vec<String>>()
                 .join(" ");
@@ -300,6 +317,50 @@ impl Raster {
         }
         // output to file
         write!(f, "{}", s).unwrap();
+        Ok(())
+    }
+
+    // Write raster to disk in GeoTiff format
+    #[cfg(feature = "with_gdal")]
+    pub fn write_geotiff(&self, file_path: String) -> std::io::Result<()> {
+        // Create a GDAL dataset with the given file path
+        let driver = DriverManager::get_driver_by_name("GTiff").unwrap();
+        let mut dataset = driver
+            .create_with_band_type::<f64, _>(
+                file_path,
+                self.array.shape()[1] as isize,
+                self.array.shape()[0] as isize,
+                1,
+            )
+            .unwrap();
+
+        // Write the data to the dataset
+        let mut band = dataset.rasterband(1).unwrap();
+        let buffer = gdal::raster::Buffer::new(
+            (self.array.shape()[1], self.array.shape()[0]),
+            self.array.clone().into_iter().collect(),
+        );
+        band.write(
+            (0, 0),
+            (self.array.shape()[1], self.array.shape()[0]),
+            &buffer,
+        )
+        .unwrap();
+
+        // Set the nodata value
+        band.set_no_data_value(Some(self.nodataval)).unwrap();
+
+        // Set the geotransform
+        let geotransform = [
+            self.origin[0],                                     // UL_x
+            self.cellsize,                                      // x_cellsize
+            0.,                                                 // x_rotation
+            self.origin[1] + self.cellsize * self.nrows as f64, // UL_y
+            0.,                                                 // y_rotation
+            -self.cellsize,                                     // y_cellsize
+        ];
+        dataset.set_geo_transform(&geotransform).unwrap();
+
         Ok(())
     }
 }
@@ -313,6 +374,11 @@ fn main() {
     let (input, output, cellsize, nodata) = (cli.input, cli.output, cli.cellsize, cli.nodata);
     let transform_pt: Point2 = [cli.x_transform, cli.y_transform];
 
+    // Check the output filename
+    if !(output.ends_with(".asc") || output.ends_with(".tif")) {
+        panic!("Unsupported file format in the output filename! Expected .asc or .tif");
+    }
+
     // Load obj
     let triangles = load_obj(&input);
 
@@ -320,9 +386,18 @@ fn main() {
     let mut raster = Raster::new(&triangles.bbox, cellsize, nodata);
 
     // Print basic info
-    println!("Creating a raster of size: [{}, {}]", raster.nrows, raster.ncols);
-    println!("Bbox min: [{}, {}]", triangles.bbox.xmin, triangles.bbox.ymin);
-    println!("Bbox max: [{}, {}]", triangles.bbox.xmax, triangles.bbox.ymax);
+    println!(
+        "Creating a raster of size: [{}, {}]",
+        raster.nrows, raster.ncols
+    );
+    println!(
+        "Bbox min: [{}, {}]",
+        triangles.bbox.xmin, triangles.bbox.ymin
+    );
+    println!(
+        "Bbox max: [{}, {}]",
+        triangles.bbox.xmax, triangles.bbox.ymax
+    );
     println!("Number of faces: {:?}", triangles.faces.len());
 
     // Loop over triangulated faces and rasterize them
@@ -333,11 +408,11 @@ fn main() {
         // Get candidate cells from triangle bbox
         let tri_bbox = triangle.bounding_rect();
         let colstart = (tri_bbox.min().x.abs() / cellsize).floor() as usize;
-        let colend   = (tri_bbox.max().x.abs() / cellsize).ceil()  as usize;
+        let colend = (tri_bbox.max().x.abs() / cellsize).ceil() as usize;
         let rowstart = (tri_bbox.min().y.abs() / cellsize).floor() as usize;
-        let rowend   = (tri_bbox.max().y.abs() / cellsize).ceil()  as usize;
-//        println!("rowstart - rowend: {} - {}", rowstart, rowend);
-//        println!("colstart - colend: {} - {}", colstart, colend);
+        let rowend = (tri_bbox.max().y.abs() / cellsize).ceil() as usize;
+        //        println!("rowstart - rowend: {} - {}", rowstart, rowend);
+        //        println!("colstart - colend: {} - {}", colstart, colend);
 
         // Check candidate cells
         for i in colstart..colend {
@@ -346,11 +421,8 @@ fn main() {
                 let coordpos = triangle.coordinate_position(pt);
                 if (coordpos == CoordPos::Inside) || (coordpos == CoordPos::OnBoundary) {
                     // interpolate
-                    let height = interpolate_linear(
-                        &triangles.get_triangle(face),
-                        pt
-                    );
-//                    println!("interpolated height: {} at [{}, {}]", height, i, j);
+                    let height = interpolate_linear(&triangles.get_triangle(face), pt);
+                    //                    println!("interpolated height: {} at [{}, {}]", height, i, j);
                     // assign if the highest value
                     if height > *raster.at(i, j) {
                         raster.set_val(i, j, height);
@@ -367,12 +439,32 @@ fn main() {
 
     // Output raster
     println!("\n\nWriting raster to disk...");
-    let re = raster.write_asc(output.to_string());
-    match re {
-        Ok(_x) => println!("--> .asc output saved to '{}'", output),
-        Err(_x) => println!("ERROR: path '{}' doesn't exist, abort.", output),
+    if output.ends_with(".asc") {
+        let re = raster.write_asc(output.to_string());
+        match re {
+            Ok(_x) => println!("--> .asc output saved to '{}'", output),
+            Err(_x) => println!("ERROR: path '{}' doesn't exist, abort.", output),
+        }
+    } else {
+        // else it should be .tif as it was checked at the beginning
+        #[cfg(feature = "with_gdal")]
+        {
+            let re = raster.write_geotiff(output.to_string());
+            match re {
+                Ok(_x) => println!("--> .tif output saved to '{}'", output),
+                Err(_x) => println!("ERROR: path '{}' doesn't exist, abort.", output),
+            }
+        }
+        #[cfg(not(feature = "with_gdal"))]
+        {
+            panic!(
+                "Rusterizer is not compiled with GDAL!\
+             Use 'cargo build --release --features with_gdal'"
+            )
+        }
     }
-//    println!("Array: {:?}", raster.array);
+
+    //    println!("Array: {:?}", raster.array);
     let duration = start.elapsed();
     println!("\nExecution time: {:?}", duration);
     println!("End");
