@@ -1,5 +1,3 @@
-mod main_python;
-
 use clap::Parser;
 use geo::coordinate_position::{CoordPos, CoordinatePosition};
 use geo::{coord, Area, BoundingRect, Coord};
