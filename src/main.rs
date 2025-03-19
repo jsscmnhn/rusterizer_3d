@@ -1,3 +1,5 @@
+mod main_python;
+
 use clap::Parser;
 use geo::coordinate_position::{CoordPos, CoordinatePosition};
 use geo::{coord, Area, BoundingRect, Coord};
@@ -411,17 +413,25 @@ fn main() {
     }
     pb.finish_with_message("done");
 
-    for ((i, j), mut heights) in height_map {
-        // descending order
+    for ((i, j), heights) in height_map {
         let mut heights_vec: Vec<_> = heights.into_iter().collect();
+        //let mut heights_vec: Vec<_> = heights.into_iter().filter(|&x| x != 0.0).collect();
 
-        // Sort descending
+        // Sort descending to get highest first
         heights_vec.sort_by(|a, b| b.partial_cmp(a).unwrap());
 
-        // Assign to raster layers
-        for layer_idx in 0..raster.layers.max(1) {
-            if let Some(val) = heights_vec.get(layer_idx) {
-                raster.arrays[layer_idx][[(raster.nrows - 1 - j), i]] = **val; // Note the double dereference
+        // Assign highest value to layer 0
+        if let Some(highest_val) = heights_vec.get(0) {
+            raster.arrays[0][[(raster.nrows - 1 - j), i]] = **highest_val;
+        }
+
+        // Assign remaining lower values to subsequent layers (ascending order)
+        let mut lower_vals: Vec<_> = heights_vec.iter().skip(1).collect();
+        lower_vals.reverse();
+
+        for layer_idx in 1..raster.layers {
+            if let Some(val) = lower_vals.get(layer_idx - 1) {
+                raster.arrays[layer_idx][[(raster.nrows - 1 - j), i]] = ***val;
             }
         }
     }
