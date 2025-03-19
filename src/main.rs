@@ -7,6 +7,8 @@ use std::fs::File;
 use std::io::Write;
 use std::time::Instant;
 use tobj;
+use std::collections::{HashSet, HashMap};
+use ordered_float::OrderedFloat;
 
 #[cfg(feature = "with_gdal")]
 use gdal::DriverManager;
@@ -21,6 +23,12 @@ struct Cli {
     output: String,
     #[arg()]
     cellsize: f64,
+    #[arg()]
+    ncols: usize,
+    #[arg()]
+    nrows: usize,
+    #[arg()]
+    layers: usize,
     #[arg(short, long, default_value_t = -9999.)]
     nodata: f64,
     #[arg(short, long, default_value_t = 0.)]
@@ -28,6 +36,7 @@ struct Cli {
     #[arg(short, long, default_value_t = 0.)]
     y_transform: f64,
 }
+
 
 //-- Types
 type Point3 = [f64; 3];
@@ -132,7 +141,7 @@ impl Triangles {
     pub fn transform_pts(&mut self) {
         let pt_transform = [-self.bbox.xmin, -self.bbox.ymin, 0.];
         for pt in self.points.iter_mut() {
-            *pt = add_pts3(*pt, pt_transform);
+            *pt = *pt // add_pts3(*pt, pt_transform);
         }
     }
 
@@ -239,25 +248,42 @@ struct Raster {
     cellsize: f64,
     origin: Point2,
     nodataval: f64,
-    array: Array2<f64>,
+    layers: usize,
+    arrays: Vec<Array2<f64>>,
 }
 
 impl Raster {
     //-- Constructor
-    pub fn new(dataset_range: &Bbox, cellsize: f64, nodata: f64) -> Self {
-        let nrows = ((dataset_range.ymax - dataset_range.ymin) / cellsize)
-            .abs()
-            .ceil() as usize;
-        let ncols = ((dataset_range.xmax - dataset_range.xmin) / cellsize)
-            .abs()
-            .ceil() as usize;
+    // pub fn new(dataset_range: &Bbox, cellsize: f64, nodata: f64) -> Self {
+    //     let nrows = ((dataset_range.ymax - dataset_range.ymin) / cellsize)
+    //         .abs()
+    //         .ceil() as usize;
+    //     let ncols = ((dataset_range.xmax - dataset_range.xmin) / cellsize)
+    //         .abs()
+    //         .ceil() as usize;
+    //     Raster {
+    //         nrows,
+    //         ncols,
+    //         cellsize,
+    //         origin: [dataset_range.xmin, dataset_range.ymin],
+    //         nodataval: nodata,
+    //         array: Array2::from_elem((nrows, ncols), nodata),
+    //     }
+    // }
+
+    pub fn new(dataset_range: &Bbox, nrows: usize, ncols: usize, cellsize: f64, nodata: f64, layers: usize) -> Self {
+        let mut arrays = Vec::new();
+        for _ in 0..(layers.max(1)) {
+            arrays.push(Array2::from_elem((nrows, ncols), nodata));
+        }
         Raster {
             nrows,
             ncols,
             cellsize,
-            origin: [dataset_range.xmin, dataset_range.ymin],
+            origin: [0.0, 0.0],
             nodataval: nodata,
-            array: Array2::from_elem((nrows, ncols), nodata),
+            layers,
+            arrays,
         }
     }
 
@@ -265,6 +291,7 @@ impl Raster {
     // Get cell centroid coordinates (x-y) in coord data structure
     // of 'geo' package
     pub fn xy_coord_geo(&self, col: usize, row: usize) -> Coord {
+        // Changed: just ignore if a value is out of bounds
         assert!(row < self.nrows, "Invalid row index!");
         assert!(col < self.ncols, "Invalid col index!");
         coord! {
@@ -273,94 +300,42 @@ impl Raster {
         }
     }
 
-    // Set cell value
-    pub fn set_val(&mut self, col: usize, row: usize, val: f64) {
-        assert!(row < self.nrows, "Invalid row index!");
-        assert!(col < self.ncols, "Invalid col index!");
-        self.array[[(self.nrows - 1 - row), col]] = val;
-    }
-
-    // Return cell value
-    pub fn at(&self, col: usize, row: usize) -> &f64 {
-        assert!(row < self.nrows, "Invalid row index!");
-        assert!(col < self.ncols, "Invalid col index!");
-        &self.array[[(self.nrows - 1 - row), col]]
-    }
-
-    // Set the XLL and YLL to user-defined coordinates
-    pub fn set_output_origin(&mut self, transform_pt: Point2) {
-        self.origin[0] += transform_pt[0];
-        self.origin[1] += transform_pt[1];
-    }
 
     // Write raster to disk in ESRI ASC format
     pub fn write_asc(&self, path: String) -> std::io::Result<()> {
-        let mut f = File::create(path)?;
-        let mut s = String::new();
-        // write header
-        s.push_str(&format!("NCOLS {}\n", self.ncols));
-        s.push_str(&format!("NROWS {}\n", self.nrows));
-        s.push_str(&format!("XLLCORNER {}\n", self.origin[0]));
-        s.push_str(&format!("YLLCORNER {}\n", self.origin[1]));
-        s.push_str(&format!("CELLSIZE  {}\n", self.cellsize));
-        s.push_str(&format!("NODATA_VALUE {}\n", self.nodataval));
-        // write raster data
-        for i in 0..self.array.dim().0 {
-            let col = self
-                .array
-                .index_axis(Axis(0), i)
-                .iter()
-                .map(|val| format!("{}", val))
-                .collect::<Vec<String>>()
-                .join(" ");
-            s.push_str(&format!("{}{}", &col, "\n"));
+        for (layer_idx, array) in self.arrays.iter().enumerate() {
+            let filename = if self.layers > 1 {
+                format!(
+                    "{}_layer{}.asc",
+                    path.trim_end_matches(".asc"),
+                    layer_idx
+                )
+            } else {
+                path.clone()
+            };
+            let mut f = File::create(filename.clone())?;
+            let mut s = String::new();
+            // Header
+            s.push_str(&format!("NCOLS {}\n", self.ncols));
+            s.push_str(&format!("NROWS {}\n", self.nrows));
+            s.push_str(&format!("XLLCORNER {}\n", self.origin[0]));
+            s.push_str(&format!("YLLCORNER {}\n", self.origin[1]));
+            s.push_str(&format!("CELLSIZE  {}\n", self.cellsize));
+            s.push_str(&format!("NODATA_VALUE {}\n", self.nodataval));
+            // Data
+            for i in 0..array.dim().0 {
+                let col = array
+                    .index_axis(Axis(0), i)
+                    .iter()
+                    .map(|val| format!("{}", val))
+                    .collect::<Vec<String>>()
+                    .join(" ");
+                s.push_str(&format!("{}\n", col));
+            }
+            // Write to file
+            write!(f, "{}", s).unwrap();
+            println!("--> Layer {} saved to '{}'", layer_idx, filename);
         }
-        // output to file
-        write!(f, "{}", s).unwrap();
-        Ok(())
-    }
-
-    // Write raster to disk in GeoTiff format
-    #[cfg(feature = "with_gdal")]
-    pub fn write_geotiff(&self, file_path: String) -> std::io::Result<()> {
-        // Create a GDAL dataset with the given file path
-        let driver = DriverManager::get_driver_by_name("GTiff").unwrap();
-        let mut dataset = driver
-            .create_with_band_type::<f64, _>(
-                file_path,
-                self.array.shape()[1] as isize,
-                self.array.shape()[0] as isize,
-                1,
-            )
-            .unwrap();
-
-        // Write the data to the dataset
-        let mut band = dataset.rasterband(1).unwrap();
-        let buffer = gdal::raster::Buffer::new(
-            (self.array.shape()[1], self.array.shape()[0]),
-            self.array.clone().into_iter().collect(),
-        );
-        band.write(
-            (0, 0),
-            (self.array.shape()[1], self.array.shape()[0]),
-            &buffer,
-        )
-        .unwrap();
-
-        // Set the nodata value
-        band.set_no_data_value(Some(self.nodataval)).unwrap();
-
-        // Set the geotransform
-        let geotransform = [
-            self.origin[0],                                     // UL_x
-            self.cellsize,                                      // x_cellsize
-            0.,                                                 // x_rotation
-            self.origin[1] + self.cellsize * self.nrows as f64, // UL_y
-            0.,                                                 // y_rotation
-            -self.cellsize,                                     // y_cellsize
-        ];
-        dataset.set_geo_transform(&geotransform).unwrap();
-
         Ok(())
     }
 }
@@ -371,7 +346,8 @@ fn main() {
 
     // Grab input agruments
     let cli = Cli::parse();
-    let (input, output, cellsize, nodata) = (cli.input, cli.output, cli.cellsize, cli.nodata);
+
+    let (input, output, cellsize, ncols, nrows, nodata, layers) = (cli.input, cli.output, cli.cellsize, cli.ncols, cli.nrows, cli.nodata, cli.layers);
     let transform_pt: Point2 = [cli.x_transform, cli.y_transform];
 
     // Check the output filename
@@ -383,7 +359,7 @@ fn main() {
     let triangles = load_obj(&input);
 
     // Initialize raster
-    let mut raster = Raster::new(&triangles.bbox, cellsize, nodata);
+    let mut raster = Raster::new(&triangles.bbox, nrows, ncols, cellsize, nodata, layers);
 
     // Print basic info
     println!(
@@ -401,7 +377,9 @@ fn main() {
     println!("Number of faces: {:?}", triangles.faces.len());
 
     // Loop over triangulated faces and rasterize them
+    let mut height_map: HashMap<(usize, usize), HashSet<OrderedFloat<f64>>> = HashMap::new();
     let pb = ProgressBar::new(triangles.faces.len() as u64);
+
     println!("\nRasterizing faces...");
     for face in 0..triangles.faces.len() {
         let triangle = triangles.get_triangle_geo(face);
@@ -423,10 +401,9 @@ fn main() {
                     // interpolate
                     let height = interpolate_linear(&triangles.get_triangle(face), pt);
                     //                    println!("interpolated height: {} at [{}, {}]", height, i, j);
-                    // assign if the highest value
-                    if height > *raster.at(i, j) {
-                        raster.set_val(i, j, height);
-                    }
+                    // CHANGED:  assign if the highest value -> save all values
+                    height_map.entry((i, j)).or_default().insert(OrderedFloat(height));
+
                 }
             }
         }
@@ -434,8 +411,24 @@ fn main() {
     }
     pb.finish_with_message("done");
 
+    for ((i, j), mut heights) in height_map {
+        // descending order
+        let mut heights_vec: Vec<_> = heights.into_iter().collect();
+
+        // Sort descending
+        heights_vec.sort_by(|a, b| b.partial_cmp(a).unwrap());
+
+        // Assign to raster layers
+        for layer_idx in 0..raster.layers.max(1) {
+            if let Some(val) = heights_vec.get(layer_idx) {
+                raster.arrays[layer_idx][[(raster.nrows - 1 - j), i]] = **val; // Note the double dereference
+            }
+        }
+    }
+
+
     // Transform points to the output CRS before writing to disk
-    raster.set_output_origin(transform_pt);
+    // raster.set_output_origin(transform_pt);
 
     // Output raster
     println!("\n\nWriting raster to disk...");
@@ -447,21 +440,21 @@ fn main() {
         }
     } else {
         // else it should be .tif as it was checked at the beginning
-        #[cfg(feature = "with_gdal")]
-        {
-            let re = raster.write_geotiff(output.to_string());
-            match re {
-                Ok(_x) => println!("--> .tif output saved to '{}'", output),
-                Err(_x) => println!("ERROR: path '{}' doesn't exist, abort.", output),
-            }
-        }
-        #[cfg(not(feature = "with_gdal"))]
-        {
-            panic!(
-                "Rusterizer is not compiled with GDAL!\
-             Use 'cargo build --release --features with_gdal'"
-            )
-        }
+        // #[cfg(feature = "with_gdal")]
+        // {
+        //     let re = raster.write_geotiff(output.to_string());
+        //     match re {
+        //         Ok(_x) => println!("--> .tif output saved to '{}'", output),
+        //         Err(_x) => println!("ERROR: path '{}' doesn't exist, abort.", output),
+        //     }
+        // }
+        // #[cfg(not(feature = "with_gdal"))]
+        // {
+        //     panic!(
+        //         "Rusterizer is not compiled with GDAL!\
+        //      Use 'cargo build --release --features with_gdal'"
+        //     )
+        // }
     }
 
     //    println!("Array: {:?}", raster.array);
