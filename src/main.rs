@@ -10,9 +10,6 @@ use tobj;
 use std::collections::{HashSet, HashMap};
 use ordered_float::OrderedFloat;
 
-#[cfg(feature = "with_gdal")]
-use gdal::DriverManager;
-
 //-- CLI parser
 #[derive(Parser)]
 #[command(author, version, about, long_about = None, allow_negative_numbers(true))]
@@ -27,8 +24,6 @@ struct Cli {
     ncols: usize,
     #[arg()]
     nrows: usize,
-    #[arg()]
-    layers: usize,
     #[arg(short, long, default_value_t = -9999.)]
     nodata: f64,
     #[arg(short, long, default_value_t = 0.)]
@@ -136,15 +131,6 @@ impl Triangles {
         }
     }
 
-    // Transform points
-    // sets origin of the dataset to [XLL, YLL] and avoids dealing with origin until the output
-    pub fn transform_pts(&mut self) {
-        let pt_transform = [-self.bbox.xmin, -self.bbox.ymin, 0.];
-        for pt in self.points.iter_mut() {
-            *pt = *pt // add_pts3(*pt, pt_transform);
-        }
-    }
-
     // Return triangle vertices
     // returns 3x3 array [x, y, z] for every face vertex
     pub fn get_triangle(&self, faceidx: usize) -> Triangle {
@@ -235,9 +221,6 @@ fn load_obj(filename: &str) -> Triangles {
         }
         ptstart = triangles.points.len();
     }
-    // Transform the coordinate system so that origin for calculation
-    // is the [XLL, YLL] of the dataset
-    triangles.transform_pts();
     return triangles;
 }
 
@@ -254,24 +237,8 @@ struct Raster {
 
 impl Raster {
     //-- Constructor
-    // pub fn new(dataset_range: &Bbox, cellsize: f64, nodata: f64) -> Self {
-    //     let nrows = ((dataset_range.ymax - dataset_range.ymin) / cellsize)
-    //         .abs()
-    //         .ceil() as usize;
-    //     let ncols = ((dataset_range.xmax - dataset_range.xmin) / cellsize)
-    //         .abs()
-    //         .ceil() as usize;
-    //     Raster {
-    //         nrows,
-    //         ncols,
-    //         cellsize,
-    //         origin: [dataset_range.xmin, dataset_range.ymin],
-    //         nodataval: nodata,
-    //         array: Array2::from_elem((nrows, ncols), nodata),
-    //     }
-    // }
 
-    pub fn new(dataset_range: &Bbox, nrows: usize, ncols: usize, cellsize: f64, nodata: f64, layers: usize) -> Self {
+    pub fn new(nrows: usize, ncols: usize, cellsize: f64, nodata: f64, layers: usize) -> Self {
         let mut arrays = Vec::new();
         for _ in 0..(layers.max(1)) {
             arrays.push(Array2::from_elem((nrows, ncols), nodata));
@@ -347,8 +314,7 @@ fn main() {
     // Grab input agruments
     let cli = Cli::parse();
 
-    let (input, output, cellsize, ncols, nrows, nodata, layers) = (cli.input, cli.output, cli.cellsize, cli.ncols, cli.nrows, cli.nodata, cli.layers);
-    let transform_pt: Point2 = [cli.x_transform, cli.y_transform];
+    let (input, output, cellsize, ncols, nrows, nodata) = (cli.input, cli.output, cli.cellsize, cli.ncols, cli.nrows, cli.nodata);
 
     // Check the output filename
     if !(output.ends_with(".asc") || output.ends_with(".tif")) {
@@ -359,7 +325,7 @@ fn main() {
     let triangles = load_obj(&input);
 
     // Initialize raster
-    let mut raster = Raster::new(&triangles.bbox, nrows, ncols, cellsize, nodata, layers);
+    let mut raster = Raster::new(nrows, ncols, cellsize, nodata, 1);
 
     // Print basic info
     println!(
@@ -417,6 +383,13 @@ fn main() {
 
         // Sort descending to get highest first
         heights_vec.sort_by(|a, b| b.partial_cmp(a).unwrap());
+
+        // Check if more layers are needed
+        if heights_vec.len() > raster.layers {
+            let new_layers = heights_vec.len();
+            raster.arrays.resize(new_layers, Array2::from_elem((nrows, ncols), nodata));
+            raster.layers = new_layers;  // Update the layer count
+        }
 
         // Assign highest value to layer 0
         if let Some(highest_val) = heights_vec.get(0) {
