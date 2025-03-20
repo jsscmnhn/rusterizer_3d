@@ -1,8 +1,8 @@
 [package]
-name = "rusterizer"
-description = "Convert 3D geometry (Wavefront OBJ format) into raster (ESRI ASCII or GeoTIFF)."
-version = "0.1.0"
-edition = "2021"
+name = "rusterizer_3d"
+description = "Convert 3D geometry (Wavefront OBJ format) into raster layers for Python."
+version = "0.1.1"
+edition = "2024"
 
 [dependencies]
 ndarray   = "0.15.0"
@@ -10,9 +10,9 @@ geo       = "0.23.0"
 rayon     = "1.5.3"
 indicatif = "0.17.2"
 tobj      = { version = "3.2.4", features = ["use_f64"] }
-clap      = { version = "4.0.26", features = ["derive"] }
-gdal      = { version = "0.14.0", features = ["bindgen"], optional = true }
+pyo3 = { version = "0.20", features = ["extension-module"] }
+numpy = "0.20"
 ordered-float = "5.0.0"
 
-[features]
-with_gdal = ["gdal"]
+[lib]
+crate-type = ["cdylib"]
