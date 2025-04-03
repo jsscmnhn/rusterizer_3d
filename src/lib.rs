@@ -6,6 +6,8 @@ use std::collections::{HashSet, HashMap};
 use ordered_float::OrderedFloat;
 use pyo3::prelude::*;
 use numpy::{IntoPyArray, PyArray2};
+use lazy_static::lazy_static;
+use std::sync::Mutex;
 
 //-- Types
 type Point3 = [f64; 3];
@@ -19,6 +21,10 @@ struct Bbox {
     ymin: f64,
     xmax: f64,
     ymax: f64,
+}
+
+lazy_static! {
+    static ref ALL_HEIGHTS_SAME: Mutex<bool> = Mutex::new(false);
 }
 
 //-- Basic functions
@@ -195,6 +201,15 @@ fn load_obj(filename: &str) -> Triangles {
         }
         ptstart = triangles.points.len();
     }
+
+    // Check if all heights are the same
+    let reference_height = triangles.points[0][2];
+    let all_heights_same = triangles.points.iter().all(|pt| pt[2] == reference_height);
+
+    // Update the global variable
+    let mut all_heights_same_lock = ALL_HEIGHTS_SAME.lock().unwrap();
+    *all_heights_same_lock = all_heights_same;
+
     return triangles;
 }
 
@@ -262,6 +277,7 @@ fn raster_to_python(raster: &Raster) -> PyResult<PyObject> {
 }
 
 fn rasterize_faces(raster: &mut Raster, triangles: &Triangles, nodata: f64){
+    println!("starting");
     // Loop over triangulated faces and rasterize them
     let mut height_map: HashMap<(usize, usize), HashSet<OrderedFloat<f64>>> = HashMap::new();
 
@@ -283,45 +299,58 @@ fn rasterize_faces(raster: &mut Raster, triangles: &Triangles, nodata: f64){
                 let pt = &raster.xy_coord_geo(i, j);
                 let coordpos = triangle.coordinate_position(pt);
                 if (coordpos == CoordPos::Inside) || (coordpos == CoordPos::OnBoundary) {
-                    let triangle_z_values: Vec<f64> = triangles.get_triangle(face).iter().map(|pt| pt[2]).collect();
-                    if triangle_z_values.iter().all(|&z| z == triangle_z_values[0]) {
-                        // If all z-values are the same (flat triangle)
-                        let height = triangle_z_values[0];
-                        height_map.entry((i, j)).or_default().insert(OrderedFloat(height));
-                    } else {
-                        // Interpolate normally for non-flat triangles
-                        let height = interpolate_linear(&triangles.get_triangle(face), pt);
-                        height_map.entry((i, j)).or_default().insert(OrderedFloat(height));
-                    }
+                    // interpolate
+                    let height = interpolate_linear(&triangles.get_triangle(face), pt);
+                    //                    println!("interpolated height: {} at [{}, {}]", height, i, j);
+                    // CHANGED:  assign if the highest value -> save all values
+                    height_map.entry((i, j)).or_default().insert(OrderedFloat(height));
 
                 }
             }
         }
     }
 
-    for ((i, j), heights) in height_map {
-        let mut heights_vec: Vec<_> = heights.into_iter().collect();
 
+    let all_heights_same_lock = ALL_HEIGHTS_SAME.lock().unwrap();
+
+    if *all_heights_same_lock {
+        println!("Only one height in the entire height_map, directly assigning to raster");
+
+        let ((i, j), heights) = height_map.iter().next().unwrap();
+        let single_height = heights.iter().next().unwrap();
+
+        if raster.arrays.is_empty() {
+            raster.arrays.push(Array2::from_elem((raster.nrows, raster.ncols), nodata));
+        }
+
+        raster.arrays[0][[(raster.nrows - 1 - j), *i]] = **single_height;
+        raster.layers = 1;
+
+        return;
+    }
+
+    for ((i, j), heights) in height_map {
+        println!("\ni  {} j {} height {}:", i, j, heights.len());
+
+        let mut heights_vec: Vec<_> = heights.into_iter().collect();
+        println!("woohooo");
         // Sort descending to get highest first
         heights_vec.sort_by(|a, b| b.partial_cmp(a).unwrap());
 
+        // Check if more layers are needed
+        if heights_vec.len() >= raster.layers {
+            let new_layers = heights_vec.len();
+            raster.arrays.resize(new_layers, Array2::from_elem((raster.nrows, raster.ncols), nodata));
+            raster.layers = new_layers;  // Update the layer count
 
-        // Check if all values are the same (flat surface case)
-        if heights_vec.len() == 1 {
-            // Assign the same value to the only layer
-            raster.arrays[0][[(raster.nrows - 1 - j), i]] = heights_vec[0].0;
-        } else {
-            if heights_vec.len() > raster.layers {
-                let new_layers = heights_vec.len();
-                raster.arrays.resize(new_layers, Array2::from_elem((raster.nrows, raster.ncols), nodata));
-                raster.layers = new_layers;  // Update the layer count
-            }
         }
 
         // Assign highest value to layer 0
         if let Some(highest_val) = heights_vec.get(0) {
             raster.arrays[0][[(raster.nrows - 1 - j), i]] = **highest_val;
         }
+
+        println!("Raster arrays: {:#?}", raster.arrays);
 
         // Assign remaining lower values to subsequent layers (ascending order)
         let mut lower_vals: Vec<_> = heights_vec.iter().skip(1).collect();
@@ -359,4 +388,56 @@ fn rasterize_from_python(input: String , ncols: usize, nrows: usize, cellsize: f
 fn rusterizer_3d(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rasterize_from_python, m)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::prelude::*;
+    use pyo3::types::PyDict;
+
+    #[test]
+    fn test_rasterize_from_python() {
+        pyo3::append_to_inittab!(rusterizer_3d);  // Register the Python module
+        pyo3::prepare_freethreaded_python();      // Initialize the Python interpreter
+
+        Python::with_gil(|py| {
+            let input = "example/objtest.obj".to_string();
+            let ncols = 800;
+            let nrows = 800;
+            let cellsize = 0.5;
+            let origin = [0.0, 0.0];
+            let nodataval = -9999.0;
+
+            // Import the 'rusterizer_3d' Python module
+            let rusterizer_3d = py.import("rusterizer_3d")
+                .expect("Failed to import rusterizer_3d");
+
+            // Get the 'rasterize_from_python' function from the module
+            let rasterize_from_python = rusterizer_3d
+                .getattr("rasterize_from_python")
+                .expect("Failed to get rasterize_from_python function");
+
+            // Call the function with the input parameters
+            let result: PyResult<&PyAny> = rasterize_from_python
+                .call1((input, ncols, nrows, cellsize, origin, nodataval));
+
+            // Handle the result
+            match result {
+                Ok(py_result) => {
+                    let numpy = py.import("numpy").expect("Failed to import numpy");
+
+                    // Access the shape attribute of the result
+                    let shape = py_result.getattr("shape")
+                        .expect("Failed to get shape attribute");
+
+                    // Print or assert things about the shape (for example)
+                    println!("Shape: {:?}", shape);
+                },
+                Err(e) => {
+                    panic!("Error calling rasterize_from_python: {:?}", e);
+                }
+            }
+        });
+    }
 }

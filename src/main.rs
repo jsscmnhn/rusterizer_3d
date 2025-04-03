@@ -10,6 +10,7 @@ use tobj;
 use std::collections::{HashSet, HashMap};
 use ordered_float::OrderedFloat;
 
+
 //-- CLI parser
 #[derive(Parser)]
 #[command(author, version, about, long_about = None, allow_negative_numbers(true))]
@@ -421,21 +422,6 @@ fn main() {
         }
     } else {
         // else it should be .tif as it was checked at the beginning
-        // #[cfg(feature = "with_gdal")]
-        // {
-        //     let re = raster.write_geotiff(output.to_string());
-        //     match re {
-        //         Ok(_x) => println!("--> .tif output saved to '{}'", output),
-        //         Err(_x) => println!("ERROR: path '{}' doesn't exist, abort.", output),
-        //     }
-        // }
-        // #[cfg(not(feature = "with_gdal"))]
-        // {
-        //     panic!(
-        //         "Rusterizer is not compiled with GDAL!\
-        //      Use 'cargo build --release --features with_gdal'"
-        //     )
-        // }
     }
 
     //    println!("Array: {:?}", raster.array);
