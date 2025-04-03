@@ -283,11 +283,16 @@ fn rasterize_faces(raster: &mut Raster, triangles: &Triangles, nodata: f64){
                 let pt = &raster.xy_coord_geo(i, j);
                 let coordpos = triangle.coordinate_position(pt);
                 if (coordpos == CoordPos::Inside) || (coordpos == CoordPos::OnBoundary) {
-                    // interpolate
-                    let height = interpolate_linear(&triangles.get_triangle(face), pt);
-                    //                    println!("interpolated height: {} at [{}, {}]", height, i, j);
-                    // CHANGED:  assign if the highest value -> save all values
-                    height_map.entry((i, j)).or_default().insert(OrderedFloat(height));
+                    let triangle_z_values: Vec<f64> = triangles.get_triangle(face).iter().map(|pt| pt[2]).collect();
+                    if triangle_z_values.iter().all(|&z| z == triangle_z_values[0]) {
+                        // If all z-values are the same (flat triangle)
+                        let height = triangle_z_values[0];
+                        height_map.entry((i, j)).or_default().insert(OrderedFloat(height));
+                    } else {
+                        // Interpolate normally for non-flat triangles
+                        let height = interpolate_linear(&triangles.get_triangle(face), pt);
+                        height_map.entry((i, j)).or_default().insert(OrderedFloat(height));
+                    }
 
                 }
             }
@@ -296,16 +301,21 @@ fn rasterize_faces(raster: &mut Raster, triangles: &Triangles, nodata: f64){
 
     for ((i, j), heights) in height_map {
         let mut heights_vec: Vec<_> = heights.into_iter().collect();
-        //let mut heights_vec: Vec<_> = heights.into_iter().filter(|&x| x != 0.0).collect();
 
         // Sort descending to get highest first
         heights_vec.sort_by(|a, b| b.partial_cmp(a).unwrap());
 
-        // Check if more layers are needed
-        if heights_vec.len() > raster.layers {
-            let new_layers = heights_vec.len();
-            raster.arrays.resize(new_layers, Array2::from_elem((raster.nrows, raster.ncols), nodata));
-            raster.layers = new_layers;  // Update the layer count
+
+        // Check if all values are the same (flat surface case)
+        if heights_vec.len() == 1 {
+            // Assign the same value to the only layer
+            raster.arrays[0][[(raster.nrows - 1 - j), i]] = heights_vec[0].0;
+        } else {
+            if heights_vec.len() > raster.layers {
+                let new_layers = heights_vec.len();
+                raster.arrays.resize(new_layers, Array2::from_elem((raster.nrows, raster.ncols), nodata));
+                raster.layers = new_layers;  // Update the layer count
+            }
         }
 
         // Assign highest value to layer 0
