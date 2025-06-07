@@ -1,6 +1,8 @@
 # Rusterizer
 
-Convert 3D geometries to a 2D raster.
+Convert 3D geometries to a layered 2d raster, required for the conversion of .obj files in [SOLWEIG_SOLFD](https://github.com/jsscmnhn/SOLWEIG_SOLFD).
+
+Original code by [Ivan Pađen](https://github.com/ipadjen)
 
 ### Data formats
 Input: Wavefront OBJ
@@ -13,12 +15,6 @@ Clone the repository and compile
 cargo build --release
 ```
 
-Optionally, to export to GeoTIFF format, you have to install GDAL and compile using 'with_gdal' feature
-```
-cargo build --release --features with_gdal
-```
-
-
 Access the executable by typing
 ```
 ./target/release/rusterizer
@@ -27,4 +23,4 @@ Access the executable by typing
 You can get Cargo [here](https://www.rust-lang.org/tools/install).
 
 ### Usage
-```rusterizer -i <input> -o <output> <cellsize>```, e.g. ```rusterizer -i example/bk.obj -o bk.asc 0.5```
+The code is only usefull as python package. A wheel for windows is provided at . To build your own version for MAC or Linux, use (PyO3)[https://github.com/PyO3/maturin]
